@@ -6,13 +6,12 @@ import (
 	"io"
 	"log"
 	"net"
-	"net/url"
 	"strings"
 	"sync"
 )
 
 //HandlerFunc ..
-type HandlerFunc func(req *Request)
+type HandlerFunc func(conn net.Conn)
 
 var (
 	//ErrBadRequest ...
@@ -28,14 +27,6 @@ type Server struct {
 	addr     string
 	mu       sync.RWMutex
 	handlers map[string]HandlerFunc
-}
-
-//Request ...
-type Request struct {
-	Conn        net.Conn
-	QueryParams url.Values
-	PathParams  map[string]string
-	Headers     map[string]string
 }
 
 //NewServer ...
@@ -77,10 +68,14 @@ func (s *Server) Start() (err error) {
 }
 
 func (s *Server) handle(conn net.Conn) {
+	defer func() {
+		if cerr := conn.Close(); cerr != nil {
+			log.Println(cerr)
 
-	defer conn.Close()
+		}
+	}()
 
-	buf := make([]byte, (1024 * 8))
+	buf := make([]byte, 4096)
 	for {
 		n, err := conn.Read(buf)
 		if err == io.EOF {
@@ -90,19 +85,14 @@ func (s *Server) handle(conn net.Conn) {
 			log.Println(err)
 			return
 		}
+		//log.Printf("%s", buf[:n])
 
-		var req Request
 		data := buf[:n]
 		rLD := []byte{'\r', '\n'}
 		rLE := bytes.Index(data, rLD)
 		if rLE == -1 {
-			log.Printf("Bad Request")
+			log.Println(ErrBadRequest)
 			return
-		}
-
-		var headerStr = string(data[rLE+2:])
-		if len(headerStr) > 0 {
-			req.Headers = getHeaders(headerStr)
 		}
 
 		reqLine := string(data[:rLE])
@@ -112,117 +102,30 @@ func (s *Server) handle(conn net.Conn) {
 			log.Println(ErrBadRequest)
 			return
 		}
-		//method, path, version := parts[0], parts[1], parts[2]
-		path, version := parts[1], parts[2]
+
+		method, path, version := parts[0], parts[1], parts[2]
+		if method != "GET" {
+			log.Println(ErrMethodNotAlowed)
+			return
+		}
 		if version != "HTTP/1.1" {
 			log.Println(ErrHTTPVersionNotValid)
 			return
 		}
 
-		decode, err := url.PathUnescape(path)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-
-		uri, err := url.ParseRequestURI(decode)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-
-		req.Conn = conn
-		req.QueryParams = uri.Query()
-
-		var handler = func(req *Request) { conn.Close() }
-
-		s.mu.RLock()
-		/* for i := 0; i < len(s.handlers); i++ {
-			if hr, found := s.handlers[uri.Path]; found {
-				handler = hr
-				break
-			}
-		} */
-		pParam, hr := s.checkPath(uri.Path)
-		if hr != nil {
-			handler = hr
-			req.PathParams = pParam
-		}
-		s.mu.RUnlock()
-
-		handler(&req)
-
-	}
-
-}
-
-func (s *Server) checkPath(path string) (map[string]string, HandlerFunc) {
-
-	strRoutes := make([]string, len(s.handlers))
-	i := 0
-	for k := range s.handlers {
-		strRoutes[i] = k
-		i++
-	}
-
-	mp := make(map[string]string)
-
-	for i := 0; i < len(strRoutes); i++ {
-		flag := false
-		route := strRoutes[i]
-		partsRoute := strings.Split(route, "/")
-		pRotes := strings.Split(path, "/")
-
-		for j, v := range partsRoute {
-			if v != "" {
-				f := v[0:1]
-				l := v[len(v)-1:]
-				if f == "{" && l == "}" {
-					mp[v[1:len(v)-1]] = pRotes[j]
-					flag = true
-				} else if pRotes[j] != v {
-
-					strs := strings.Split(v, "{")
-					if len(strs) > 0 {
-						key := strs[1][:len(strs[1])-1]
-						mp[key] = pRotes[j][len(strs[0]):]
-						flag = true
-					} else {
-						flag = false
-						break
-					}
+		if len(s.handlers) > 0 {
+			var handler HandlerFunc
+			s.mu.RLock()
+			for i := 0; i < len(s.handlers); i++ {
+				if hr, found := s.handlers[path]; found {
+					handler = hr
+					break
 				}
-				flag = true
 			}
+			s.mu.RUnlock()
+			handler(conn)
 		}
-		if flag {
-			if hr, found := s.handlers[route]; found {
-				return mp, hr
-			}
-			break
-		}
+
 	}
 
-	return nil, nil
-
-}
-
-func getHeaders(str string) map[string]string {
-
-	mp := make(map[string]string)
-	strs := strings.Split(str, "\n")
-
-	for i := 0; i < len(strs); i++ {
-		v := strs[i]
-		if len(strings.TrimSpace(v)) == 0 {
-			continue
-		}
-		if v != "" && v != " " {
-			strkey := strings.Split(v, ": ")[0]
-			strval := strings.Split(v, ": ")[1]
-			mp[strkey] = strval
-		}
-	}
-
-	return mp
 }

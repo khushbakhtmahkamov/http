@@ -4,68 +4,41 @@ import (
 
 	"github.com/khushbakhtmahkamov/http/pkg/server"
 
-	"fmt"
 	"log"
 	"net"
 	"os"
 	"strconv"
 )
-
-const header = "HTTP/1.1 200 OK\r\n" +
-	"Content-Length: %s\r\n" +
-	"Content-Type: %s\r\n" +
-	"Connection: close\r\n" +
-	"\r\n"
-
-func main() {
+func main(){
 	host := "0.0.0.0"
-	port := "9999"
+	port := "8080"
 
-	if err := execute(host, port); err != nil {
-		os.Exit(1)
+	if err := execute(host, port); err != nil{
+		os.Exit(1);
 	}
 }
 
-func execute(host, port string) (err error) {
+func execute(host string, port string)error{
 	srv := server.NewServer(net.JoinHostPort(host, port))
-
-	srv.Register("/", func(req *server.Request) {
-		body := "Welcome to our website"
-		const header = "HTTP/1.1 200 OK\r\n" +
-			"Content-Length: %s\r\n" +
-			"Content-Type: %s\r\n" +
-			"Connection: close\r\n" +
-			"\r\n"
-
-		id := req.QueryParams["id"]
-		log.Println(id)
-		_, err = req.Conn.Write([]byte(fmt.Sprintf(header, strconv.Itoa(len(body)), "text/html") + body))
-
+	body := "hello";
+	srv.Register("/api/category{category}/{id}", func(req *server.Request){
+		_, err := req.Conn.Write([]byte(
+			"HTTP/1.1 200 OK\r\n" +
+				"Content-Length: " + strconv.Itoa(len(body)) + "\r\n" +
+				"Content-Type: text/html\r\n" +
+				"Connection: close\r\n" +
+				"\r\n" + body,
+		))
 		if err != nil {
-			log.Println(err)
+			log.Print(err)
 		}
 	})
-
-	srv.Register("/category/{categoryID}/partners/{pID}", func(req *server.Request) {
-		body := "Welcome to our website"
-		const header = "HTTP/1.1 200 OK\r\n" +
-			"Content-Length: %s\r\n" +
-			"Content-Type: %s\r\n" +
-			"Connection: close\r\n" +
-			"\r\n"
-
-		categoryID := req.PathParams["categoryID"]
-		log.Println(categoryID)
-
-		pID := req.PathParams["pID"]
-		log.Println(pID)
-
-		_, err = req.Conn.Write([]byte(fmt.Sprintf(header, strconv.Itoa(len(body)), "text/html") + body))
-
-		if err != nil {
-			log.Println(err)
-		}
-	})
-
+	// body, err := ioutil.ReadFile("static/index.html");
+	// if(err != nil){
+	// 	log.Print("can't read file");
+	// 	return err;
+	// }
+	// srv.Add("/", string(body))
+	// srv.Add("/about", "About Golang Academy")
 	return srv.Start()
 }

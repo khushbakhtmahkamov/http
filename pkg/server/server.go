@@ -6,12 +6,13 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/url"
 	"strings"
 	"sync"
 )
 
 //HandlerFunc ..
-type HandlerFunc func(conn net.Conn)
+type HandlerFunc func(req *Request)
 
 var (
 	//ErrBadRequest ...
@@ -27,6 +28,12 @@ type Server struct {
 	addr     string
 	mu       sync.RWMutex
 	handlers map[string]HandlerFunc
+}
+
+//Request ...
+type Request struct {
+	Conn        net.Conn
+	QueryParams url.Values
 }
 
 //NewServer ...
@@ -68,14 +75,10 @@ func (s *Server) Start() (err error) {
 }
 
 func (s *Server) handle(conn net.Conn) {
-	defer func() {
-		if cerr := conn.Close(); cerr != nil {
-			log.Println(cerr)
 
-		}
-	}()
+	defer conn.Close()
 
-	buf := make([]byte, 4096)
+	buf := make([]byte, (1024 * 8))
 	for {
 		n, err := conn.Read(buf)
 		if err == io.EOF {
@@ -85,13 +88,13 @@ func (s *Server) handle(conn net.Conn) {
 			log.Println(err)
 			return
 		}
-		//log.Printf("%s", buf[:n])
 
+		var req Request
 		data := buf[:n]
 		rLD := []byte{'\r', '\n'}
 		rLE := bytes.Index(data, rLD)
 		if rLE == -1 {
-			log.Println(ErrBadRequest)
+			log.Printf("Bad Request")
 			return
 		}
 
@@ -102,27 +105,40 @@ func (s *Server) handle(conn net.Conn) {
 			log.Println(ErrBadRequest)
 			return
 		}
-
-		method, path, version := parts[0], parts[1], parts[2]
-		if method != "GET" {
-			log.Println(ErrMethodNotAlowed)
-			return
-		}
+		//method, path, version := parts[0], parts[1], parts[2]
+		path, version := parts[1], parts[2]
 		if version != "HTTP/1.1" {
 			log.Println(ErrHTTPVersionNotValid)
 			return
 		}
 
-		var handler HandlerFunc
+		decode, err := url.PathUnescape(path)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		uri, err := url.ParseRequestURI(decode)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		req.Conn = conn
+		req.QueryParams = uri.Query()
+
+		var handler = func(req *Request) { conn.Close() }
+
 		s.mu.RLock()
 		for i := 0; i < len(s.handlers); i++ {
-			if hr, found := s.handlers[path]; found {
+			if hr, found := s.handlers[uri.Path]; found {
 				handler = hr
 				break
 			}
 		}
 		s.mu.RUnlock()
-		handler(conn)
+
+		handler(&req)
 
 	}
 

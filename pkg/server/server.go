@@ -113,18 +113,16 @@ func (s *Server) handle(conn net.Conn) {
 			return
 		}
 
-		if len(s.handlers) > 0 {
-			var handler HandlerFunc
-			s.mu.RLock()
-			for i := 0; i < len(s.handlers); i++ {
-				if hr, found := s.handlers[path]; found {
-					handler = hr
-					break
-				}
+		var handler HandlerFunc
+		s.mu.RLock()
+		for i := 0; i < len(s.handlers); i++ {
+			if hr, found := s.handlers[path]; found {
+				handler = hr
+				break
 			}
-			s.mu.RUnlock()
-			handler(conn)
 		}
+		s.mu.RUnlock()
+		handler(conn)
 
 	}
 

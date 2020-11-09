@@ -1,13 +1,13 @@
 package main
 
 import (
+	"github.com/khushbakhtmahkamov/http/pkg/server"
+
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"strconv"
-
-	"github.com/khushbakhtmahkamov/http/pkg/server"
 )
 
 const header = "HTTP/1.1 200 OK\r\n" +

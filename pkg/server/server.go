@@ -36,7 +36,6 @@ type Request struct {
 	QueryParams url.Values
 	PathParams  map[string]string
 	Headers     map[string]string
-	Body        []byte
 }
 
 //NewServer ...
@@ -101,29 +100,10 @@ func (s *Server) handle(conn net.Conn) {
 			return
 		}
 
-		// headers
-		hLD := []byte{'\r', '\n', '\r', '\n'}
-		hLE := bytes.Index(data, hLD)
-		if rLE == -1 {
-			return
+		var headerStr = string(data[rLE+2:])
+		if len(headerStr) > 0 {
+			req.Headers = getHeaders(headerStr)
 		}
-
-		headersLine := string(data[rLE:hLE])
-		headers := strings.Split(headersLine, "\r\n")[1:]
-		//headers = headers[1:]
-		mp := make(map[string]string)
-		for _, v := range headers {
-			headerLine := strings.Split(v, ": ")
-			mp[headerLine[0]] = headerLine[1]
-		}
-
-		req.Headers = mp
-
-		// Body
-		b := string(data[hLE:])
-		b = strings.Trim(b, "\r\n")
-
-		req.Body = []byte(b)
 
 		reqLine := string(data[:rLE])
 		parts := strings.Split(reqLine, " ")
@@ -157,6 +137,12 @@ func (s *Server) handle(conn net.Conn) {
 		var handler = func(req *Request) { conn.Close() }
 
 		s.mu.RLock()
+		/* for i := 0; i < len(s.handlers); i++ {
+			if hr, found := s.handlers[uri.Path]; found {
+				handler = hr
+				break
+			}
+		} */
 		pParam, hr := s.checkPath(uri.Path)
 		if hr != nil {
 			handler = hr
@@ -219,4 +205,24 @@ func (s *Server) checkPath(path string) (map[string]string, HandlerFunc) {
 
 	return nil, nil
 
+}
+
+func getHeaders(str string) map[string]string {
+
+	mp := make(map[string]string)
+	strs := strings.Split(str, "\n")
+
+	for i := 0; i < len(strs); i++ {
+		v := strs[i]
+		if len(strings.TrimSpace(v)) == 0 {
+			continue
+		}
+		if v != "" && v != " " {
+			strkey := strings.Split(v, ": ")[0]
+			strval := strings.Split(v, ": ")[1]
+			mp[strkey] = strval
+		}
+	}
+
+	return mp
 }

@@ -34,6 +34,7 @@ type Server struct {
 type Request struct {
 	Conn        net.Conn
 	QueryParams url.Values
+	PathParams  map[string]string
 }
 
 //NewServer ...
@@ -130,16 +131,64 @@ func (s *Server) handle(conn net.Conn) {
 		var handler = func(req *Request) { conn.Close() }
 
 		s.mu.RLock()
-		for i := 0; i < len(s.handlers); i++ {
+		/* for i := 0; i < len(s.handlers); i++ {
 			if hr, found := s.handlers[uri.Path]; found {
 				handler = hr
 				break
 			}
+		} */
+		pParam, hr := s.checkPath(uri.Path)
+		if hr != nil {
+			handler = hr
+			req.PathParams = pParam
 		}
 		s.mu.RUnlock()
 
 		handler(&req)
 
 	}
+
+}
+
+func (s *Server) checkPath(path string) (map[string]string, HandlerFunc) {
+
+	strRoutes := make([]string, len(s.handlers))
+	i := 0
+	for k := range s.handlers {
+		strRoutes[i] = k
+		i++
+	}
+
+	mp := make(map[string]string)
+
+	for i := 0; i < len(strRoutes); i++ {
+		flag := false
+		route := strRoutes[i]
+		partsRoute := strings.Split(route, "/")
+		pRotes := strings.Split(path, "/")
+
+		for j, v := range partsRoute {
+			if v != "" {
+				f := v[0:1]
+				l := v[len(v)-1:]
+				if f == "{" && l == "}" {
+					mp[v[1:len(v)-1]] = pRotes[j]
+					flag = true
+				} else if pRotes[j] != v {
+					flag = false
+					break
+				}
+				flag = true
+			}
+		}
+		if flag {
+			if hr, found := s.handlers[route]; found {
+				return mp, hr
+			}
+			break
+		}
+	}
+
+	return nil, nil
 
 }

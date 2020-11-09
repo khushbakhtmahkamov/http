@@ -175,8 +175,16 @@ func (s *Server) checkPath(path string) (map[string]string, HandlerFunc) {
 					mp[v[1:len(v)-1]] = pRotes[j]
 					flag = true
 				} else if pRotes[j] != v {
-					flag = false
-					break
+
+					strs := strings.Split(v, "{")
+					if len(strs) > 0 {
+						key := strs[1][:len(strs[1])-1]
+						mp[key] = pRotes[j][len(strs[0]):]
+						flag = true
+					} else {
+						flag = false
+						break
+					}
 				}
 				flag = true
 			}

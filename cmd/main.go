@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/najibulloShapoatov/http/pkg/server"
+	"github.com/khushbakhtmahkamov/http/pkg/server"
 
 	"net"
 	"os"

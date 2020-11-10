@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"io"
 	"log"
 	"net"
 	"net/url"
@@ -10,6 +11,17 @@ import (
 	"sync"
 )
 
+const (
+	HOST = "0.0.0.0"
+	PORT = "9999"
+)
+
+type Request struct {
+	Conn        net.Conn
+	QueryParams url.Values
+	PathParams  map[string]string
+}
+
 type HandlerFunc func(req *Request)
 
 type Server struct {
@@ -17,172 +29,112 @@ type Server struct {
 	mu       sync.RWMutex
 	handlers map[string]HandlerFunc
 }
-type Request struct {
-	Conn        net.Conn
-	QueryParams url.Values
-	PathParams  map[string]string
-	Headers     map[string]string
-	Body        []byte
+
+func NewServer(add string) *Server {
+	return &Server{
+		addr:     add,
+		handlers: make(map[string]HandlerFunc),
+	}
 }
 
-func NewServer(addr string) *Server {
-	return &Server{addr: addr, handlers: make(map[string]HandlerFunc)}
-}
 func (s *Server) Register(path string, handler HandlerFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.handlers[path] = handler
 }
-func (s *Server) Add(path string, body string) {
-	s.Register(path, func(req *Request) {
-		_, err := req.Conn.Write([]byte(
-			"HTTP/1.1 200 OK\r\n" +
-				"Content-Length: " + strconv.Itoa(len(body)) + "\r\n" +
-				"Content-Type: text/html\r\n" +
-				"Connection: close\r\n" +
-				"\r\n" + body,
-		))
+
+func (s *Server) Start() error {
+	listner, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		log.Print(err)
+		return err
+	}
+
+	for {
+		conn, err := listner.Accept()
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		go s.handle(Request{
+			Conn: conn,
+		})
+	}
+}
+
+func (s *Server) handle(req Request) {
+	defer func() {
+		if closeErr := req.Conn.Close(); closeErr != nil {
+			log.Println(closeErr)
+		}
+	}()
+
+	buf := make([]byte, 4096)
+	n, err := req.Conn.Read(buf)
+	if err == io.EOF {
+		log.Printf("%s", buf[:n])
+	}
+
+	data := buf[:n]
+	requestLineDelim := []byte{'\r', '\n'}
+	requestLineEnd := bytes.Index(data, requestLineDelim)
+	if requestLineEnd == -1 {
+		log.Print("requestLineEndErr: ", requestLineEnd)
+	}
+
+	requestLine := string(data[:requestLineEnd])
+	parts := strings.Split(requestLine, " ")
+	if len(parts) != 3 {
+		log.Print("partsErr: ", parts)
+	}
+
+	path := parts[1]
+	if strings.Contains(path, "payments") {
+		uri, err := url.ParseRequestURI(path)
+		if err != nil {
+			log.Println("url query parse err: ", err)
+		}
+
+		if uri.RawQuery != "" {
+			req.QueryParams = uri.Query()
+			log.Println(req.QueryParams["id"])
+			_, err = req.Conn.Write([]byte(s.Response("ID: " + req.QueryParams["id"][0])))
+		} else {
+			split := strings.Split(uri.Path, "/payments/")
+			m := make(map[string]string)
+			m["id"] = split[1]
+			req.PathParams = m
+			log.Println(req.PathParams["id"])
+			_, err = req.Conn.Write([]byte(s.Response("ID: " + req.PathParams["id"])))
+		}
+
+		path = uri.Path
+	}
+	if err != nil {
+		log.Print(err)
+	}
+
+	s.mu.RLock()
+	if handler, ok := s.handlers[path]; ok {
+		s.mu.RUnlock()
+		handler(&req)
+	}
+	return
+}
+
+func (s *Server) RouteHandler(body string) func(req *Request) {
+	return func(req *Request) {
+		_, err := req.Conn.Write([]byte(s.Response(body)))
 		if err != nil {
 			log.Print(err)
 		}
-	})
-}
-func (s *Server) Start() error {
-	// TODO: HW starts here
-	listener, err := net.Listen("tcp", s.addr)
-	if err != nil {
-		return err
-	}
-	log.Println("server listening!")
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			conn.Close()
-			continue
-		}
-
-		log.Println("Connected!")
-
-		go s.handle(conn)
 	}
 }
-func (s *Server) handle(conn net.Conn) {
-	defer conn.Close()
 
-	buf := make([]byte, (1024 * 50))
-
-	for {
-		rbyte, err := conn.Read(buf)
-		if err != nil {
-			return
-		}
-		data := buf[:rbyte]
-		ldelim := []byte{'\r', '\n'}
-		index := bytes.Index(data, ldelim)
-		if index == -1 {
-			log.Println("delim chars not found :(")
-			return
-		}
-		var req Request
-		var good bool = true
-		var path1 string = ""
-		rline := string(data[:index])
-		parts := strings.Split(rline, " ")
-		var header []byte = data[index+2:]
-		req.Headers = make(map[string]string)
-		req.PathParams = make(map[string]string)
-		if len(parts) == 3 {
-			_, path, version := parts[0], parts[1], parts[2]
-			decode, err := url.PathUnescape(path)
-			if err != nil {
-				log.Println(err)
-				return
-			}
-			if version != "HTTP/1.1" {
-				log.Println("version is not valid")
-				return
-			}
-			url, err := url.ParseRequestURI(decode)
-			if err != nil {
-				log.Println(err)
-				return
-			}
-			req.Conn = conn
-			req.QueryParams = url.Query()
-			partsPath := strings.Split(url.Path, "/")
-			for cur := range s.handlers {
-				partsCur := strings.Split(cur, "/")
-				if len(partsPath) != len(partsCur) {
-					continue
-				}
-				var n int = len(partsPath)
-				for i := 0; i < n && good == true; i++ {
-					var l int = strings.Index(partsCur[i], "{")
-					var r int = strings.LastIndex(partsCur[i], "}")
-					var cnt int = strings.Count(partsCur[i], "{") +
-						strings.Count(partsCur[i], "}")
-					if cnt == 0 {
-						if partsCur[i] != partsPath[i] {
-							good = false
-						}
-					} else if cnt == 2 {
-						req.PathParams[partsCur[i][l+1:r]] = partsPath[i][l:]
-					} else {
-						good = false
-					}
-				}
-				if good == false {
-					req.PathParams = make(map[string]string)
-				} else {
-					path1 = cur
-					break
-				}
-			}
-			log.Println("decode(path:)", decode)
-			log.Println("url.Query():", url.Query())
-			log.Println("url.Path:", url.Path)
-			log.Println("path1:", path1)
-			log.Println("req.PathParams:", req.PathParams)
-		}
-		/// Headers...
-		var body []byte
-		if len(header) > 0 {
-			ldelim := []byte{'\r', '\n', '\r', '\n'}
-			index := bytes.Index(header, ldelim)
-			if index == -1 {
-				log.Println("delim ^ 2 chars not found :(")
-				return
-			}
-			body = header[index+4:]
-			data := string(header[:index])
-			log.Println("data(header):", data)
-			lheader := strings.Split(data, "\r\n")
-			for _, header := range lheader {
-				index := strings.Index(header, ":")
-				if index == -1 {
-					log.Println("index for seperating key and value not found")
-					return
-				}
-				key, value := header[:index], header[index+2:]
-				req.Headers[key] = value // join them
-			}
-			log.Println("Headers: ", req.Headers)
-		}
-		// Body...
-		req.Body = body
-		log.Println("Body:", string(body))
-
-		log.Println()
-		var f = func(req *Request) {}
-
-		s.mu.RLock()
-		f, good = s.handlers[path1]
-		s.mu.RUnlock()
-
-		if good == false {
-			conn.Close()
-		} else {
-			f(&req)
-		}
-	}
+func (s *Server) Response(body string) string {
+	return "HTTP/1.1 200 OK\r\n" +
+		"Content-Length: " + strconv.Itoa(len(body)) + "\r\n" +
+		"Content-Type: text/html\r\n" +
+		"Connection: close\r\n" +
+		"\r\n" + body
 }
